@@ -1,0 +1,134 @@
+let R_points=[]; let symbolsCache=[]; let sio=null;
+function el(tag,attrs={},children=[]){const e=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>{if(k==='class')e.className=v;else if(k==='html')e.innerHTML=v;else e.setAttribute(k,v);});children.forEach(c=>e.appendChild(c));return e;}
+function renderR(){const root=document.getElementById('r_list');root.innerHTML='';R_points.forEach((v,i)=>{const inp=el('input',{class:'input',type:'number',step:'0.1',value:v});inp.addEventListener('input',ev=>{R_points[i]=parseFloat(ev.target.value||0)});root.appendChild(inp);});}
+function renderTemplates(items){const root=document.getElementById('tpl_list');root.innerHTML='';if(!items.length){root.innerHTML='<div class="small">No templates</div>';return;}for(const t of items){const d=el('div',{class:'list-item'});d.innerHTML=`<div><div class="name">${t.name}</div><div class="small">${new Date(t.created_at*1000).toLocaleString()}</div></div><div class="row"><button class="btn" data-id="${t.id}" data-act="load">✏️</button><button class="btn btn-danger" data-id="${t.id}" data-act="del">🗑</button></div>`;root.appendChild(d);}root.querySelectorAll('button').forEach(b=>b.addEventListener('click',async ev=>{const id=ev.target.getAttribute('data-id');const act=ev.target.getAttribute('data-act');if(act==='del'){if(!confirm('Delete template?'))return;await fetch('/templates/delete/'+id,{method:'POST'});loadTemplates();}else{const r=await fetch('/templates/get/'+id);const t=await r.json();loadTemplateIntoForm(t);}}));}
+function loadTemplateIntoForm(t){bot_name.value=t.name;bot_symbol.value=t.symbol||'';long_on.checked=!!t.long_enabled;short_on.checked=!!t.short_enabled;long_lev.value=t.long_leverage||1;short_lev.value=t.short_leverage||1;long_amt.value=t.long_amount||0;short_amt.value=t.short_amount||0;R_points=(t.r_points||[]);renderR();cond_sl_close.checked=!!t.cond_sl_close;cond_trailing.checked=!!t.cond_trailing;cond_close_last.checked=!!t.cond_close_last;}
+async function safeJson(r){const txt=await r.text();try{return JSON.parse(txt)}catch(e){return {__raw:txt, error:`HTTP ${r.status}`}}}
+async function fetchSymbols(){const r=await fetch('/api/futures/symbols');const d=await safeJson(r);if(d.symbols){return d.symbols;}alert('Symbol list error: '+(d.error||d.__raw||'unknown'));return [];}
+async function initSymbolSuggest(){symbolsCache=await fetchSymbols();const input=document.getElementById('bot_symbol');const list=document.getElementById('symbol_suggest');input.addEventListener('input',e=>{updateMinNotional();const q=(e.target.value||'').toUpperCase();if(!q){list.innerHTML='';return;}const matches=symbolsCache.filter(s=>s.includes(q)).slice(0,5);list.innerHTML='';matches.forEach(m=>{const li=el('div',{class:'list-item'});li.innerHTML=`<div class="name">${m}</div>`;li.addEventListener('click',()=>{input.value=m;list.innerHTML='';});list.appendChild(li);});});}
+function renderBots(list){
+  const root = document.getElementById('bots_list');
+  root.innerHTML = '';
+  if(!list || !list.length){ root.innerHTML = '<div class="small">No bots yet.</div>'; return; }
+
+  list.forEach(b=>{
+    const bothClosed = (String(b.long_status||'').toLowerCase()==='closed') &&
+                       (String(b.short_status||'').toLowerCase()==='closed');
+
+    const card = document.createElement('div');
+    card.className = 'bot-card';
+
+    const head = document.createElement('div');
+    head.className = 'bot-head';
+
+    const left = document.createElement('div');
+    left.innerHTML = `
+      <div class="bot-title">${b.name||'-'}</div>
+      <div class="bot-meta">Coin: <b id="sym-${b.id}">${b.symbol||'-'}</b></div>
+    `;
+
+    const right = document.createElement('div');
+    right.style.textAlign = 'right';
+    const __startTs = (b.started_at||b.start_time||b.start_ts||b.created_at);
+    const started = (__startTs ? new Date((__startTs)*1000).toLocaleString() : (b.started_at_text||'-'));
+    right.innerHTML = `
+      <div class="bot-meta">Start at: <b id="start-${b.id}">${started}</b></div>
+      <div class="bot-meta">Account: <b id="acc-${b.id}">${b.account_name||b.account||'-'}</b></div>
+      `;
+
+    head.appendChild(left);
+    head.appendChild(right);
+
+    const grid = document.createElement('div');
+    grid.className = 'bot-grid';
+
+    const col1 = document.createElement('div');
+    const longState = String(b.long_status||b.long_state||'No trade');
+    const shortState = String(b.short_status||b.short_state||'No trade');
+
+    const longClass =
+      longState.toLowerCase()==='running' ? 'status-ok' :
+      longState.toLowerCase()==='closed'  ? 'status-warn' : 'status-off';
+
+    const shortClass =
+      shortState.toLowerCase()==='running' ? 'status-ok' :
+      shortState.toLowerCase()==='closed'  ? 'status-warn' : 'status-off';
+
+    col1.innerHTML = `
+      <div><b>Long</b> — Status: <span id="lstat-${b.id}" class="${longClass}">${longState}</span></div>
+      <div><b>Short</b> — Status: <span id="sstat-${b.id}" class="${shortClass}">${shortState}</span></div>
+    `;
+
+    const col2 = document.createElement('div');
+    const mark = (b.mark_price!=null? b.mark_price : (b.price||'-'));
+    const lroi = Number(b.long_roi||0);
+    const sroi = Number(b.short_roi||0);
+
+    col2.innerHTML = `
+      <div>Market Price: <span class="price" id="mark-${b.id}">${mark}</span></div>
+      <div>ROI (Long): <span class="roi ${ lroi>=0 ? 'roi-pos':'roi-neg' }" id="lroi-${b.id}">${lroi.toFixed(2)}%</span></div>
+      <div>ROI (Short): <span class="roi ${ sroi>=0 ? 'roi-pos':'roi-neg' }" id="sroi-${b.id}">${sroi.toFixed(2)}%</span></div>
+    `;
+
+    grid.appendChild(col1);
+    grid.appendChild(col2);
+
+    const foot = document.createElement('div');
+    foot.style.marginTop = '12px';
+    if(!bothClosed){
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-danger';
+      btn.textContent = 'Close trade';
+      btn.addEventListener('click', async ()=>{
+        btn.disabled = true;
+        const r = await fetch('/bots/close/'+b.id, {method:'POST'});
+        try { await r.json(); } catch(e){}
+        btn.disabled = false;
+        await refreshBots();
+      });
+      foot.appendChild(btn);
+    } else {
+      const btn = document.createElement('button');
+      btn.className='btn btn-danger';
+      btn.textContent='Closed';
+      btn.disabled = true;
+      foot.appendChild(btn);
+    }
+
+    card.appendChild(head);
+    card.appendChild(grid);
+    card.appendChild(foot);
+    root.appendChild(card);
+  });
+}
+async function refreshBots(){const r=await fetch('/bots/list');const d=await r.json();renderBots(d.items||[]);}
+document.getElementById('r_add').addEventListener('click',()=>{R_points.push(0);renderR();});
+document.getElementById('btn_save_tpl').addEventListener('click',async()=>{const body=getFormPayload();if(!body.name){alert('Bot name required');return;}await fetch('/templates/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await loadTemplates();alert('Template saved');});
+function getFormPayload(){return{name:bot_name.value.trim(),account_id:parseInt(bot_account.value||0),symbol:bot_symbol.value.trim().toUpperCase(),long_enabled:long_on.checked?1:0,long_leverage:parseInt(long_lev.value||1),long_amount:parseFloat(long_amt.value||0),short_enabled:short_on.checked?1:0,short_leverage:parseInt(short_lev.value||1),short_amount:parseFloat(short_amt.value||0),r_points:R_points,cond_sl_close:cond_sl_close.checked?1:0,cond_trailing:cond_trailing.checked?1:0,cond_close_last:cond_close_last.checked?1:0};}
+document.getElementById('btn_submit').addEventListener('click',async()=>{const body=getFormPayload();if(!body.name||!body.account_id||!body.symbol){alert('Name, account and symbol required');return;}if(!body.long_enabled&&!body.short_enabled){alert('Enable Long and/or Short');return;}const r=await fetch('/bots/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await safeJson(r);if(d.error||!d.ok){alert('Submit failed: '+(d.error||d.__raw||'unknown'));return;}await refreshBots();alert('Bot submitted');});
+
+function initSocket(){
+  sio = io();
+  sio.on('bot_roi', p=>{
+    if(!p || !p.bot_id) return;
+    const id = p.bot_id;
+    const m = document.getElementById('mark-'+id);
+    if(m) m.textContent = (p.mark_price!=null) ? p.mark_price : '-';
+    const l = document.getElementById('lroi-'+id);
+    if(l){ const v=Number(p.long_roi||0); l.textContent=v.toFixed(2)+'%'; l.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
+    const s = document.getElementById('sroi-'+id);
+    if(s){ const v=Number(p.short_roi||0); s.textContent=v.toFixed(2)+'%'; s.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
+  });
+
+  sio.on('bot_status_update', p=>{
+    if(!p || !p.bot_id) return;
+    console.log(`Received status update for bot ${p.bot_id}, refreshing list...`);
+    refreshBots();
+  });
+}
+
+async function loadTemplates(){const r=await fetch('/templates/list');const d=await r.json();renderTemplates(d.items||[]);}
+async function hydrateDashboard(){R_points=(window.__R_DEFAULT__||[]).slice();renderR();await initSymbolSuggest(); await updateMinNotional();await loadTemplates();await refreshBots();initSocket();}
+window.hydrateDashboard=hydrateDashboard;
+
+async function updateMinNotional(){const sym=(bot_symbol.value||'').toUpperCase();const noteL=document.getElementById('note_long');const noteS=document.getElementById('note_short');if(!sym){if(noteL)noteL.textContent='';if(noteS)noteS.textContent='';return;}try{const r=await fetch('/api/symbol-info?symbol='+encodeURIComponent(sym));const d=await r.json();if(d.min_notional!=null){const n = Number(d.min_notional||0); if(noteL) noteL.textContent = n>0 ? ('Min notional $'+n) : ''; if(noteS) noteS.textContent = n>0 ? ('Min notional $'+n) : '';} }catch(e){} }
