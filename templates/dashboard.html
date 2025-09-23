@@ -1,4 +1,3 @@
-
 {% extends "base.html" %}{% set active_page='dashboard' %}
 {% block content %}
 <div class="grid">
@@ -35,12 +34,24 @@
     <h3 class="mt2">Saved Templates</h3><div id="tpl_list" class="list"></div>
   </div>
   <div class="card">
-    <div class="row" style="justify-content:space-between"><h2>Bots</h2><a class="small" id="view_more" href="#">View more</a></div>
+    <div class="row" style="justify-content:space-between">
+      <h2>Bots</h2>
+      <div id="pagination-controls" class="row">
+        <button id="btn_prev" class="btn">Previous</button>
+        <span id="page_info" class="small"></span>
+        <button id="btn_next" class="btn">Next</button>
+      </div>
+    </div>
     <div id="bots_list" class="list"></div>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-<script>window.__R_DEFAULT__=[-20,10,15,20,25];window.__TPL__={{ templates_json|safe }};window.__ACCOUNTS__={{ accounts_json|safe }};hydrateDashboard();</script>
+<script>
+    window.__R_DEFAULT__ = {{ r_default_json|safe }};
+    window.__TPL__={{ templates_json|safe }};
+    window.__ACCOUNTS__={{ accounts_json|safe }};
+    hydrateDashboard();
+</script>
 {% endblock %}

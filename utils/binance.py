@@ -132,7 +132,8 @@ class BinanceUM:
             d=self._request('GET','/fapi/v1/positionSide/dual', signed=True)
             return bool(d.get('dualSidePosition'))
         except Exception:
-            return True
+            # Fix: Return False or re-raise on error
+            return False
 
     def order_market(self, symbol, side, quantity, position_side=None, reduce_only=False):
         params={'symbol':symbol,'side':side,'type':'MARKET','quantity':quantity}
@@ -165,6 +166,8 @@ class BinanceUM:
                         step=float(f.get('stepSize')); minQ=float(f.get('minQty'))
                         precision=max(0, str(step)[::-1].find('.'))
                         if step>=1: precision=0
-                        q=qty-(qty%step); q=max(q, minQ)
+                        # Fix: Correctly round quantity to be a multiple of step size and not below minQty
+                        q = round(qty / step) * step
+                        q = max(q, minQ)
                         return float(f"{q:.{precision}f}")
         return qty

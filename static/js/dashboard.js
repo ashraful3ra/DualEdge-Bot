@@ -1,4 +1,6 @@
-let R_points=[]; let symbolsCache=[]; let sio=null;
+// u-trade-bot/static/js/dashboard.js
+
+let R_points=[]; let symbolsCache=[]; let sio=null; let currentPage = 1;
 function el(tag,attrs={},children=[]){const e=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>{if(k==='class')e.className=v;else if(k==='html')e.innerHTML=v;else e.setAttribute(k,v);});children.forEach(c=>e.appendChild(c));return e;}
 function renderR(){const root=document.getElementById('r_list');root.innerHTML='';R_points.forEach((v,i)=>{const inp=el('input',{class:'input',type:'number',step:'0.1',value:v});inp.addEventListener('input',ev=>{R_points[i]=parseFloat(ev.target.value||0)});root.appendChild(inp);});}
 function renderTemplates(items){const root=document.getElementById('tpl_list');root.innerHTML='';if(!items.length){root.innerHTML='<div class="small">No templates</div>';return;}for(const t of items){const d=el('div',{class:'list-item'});d.innerHTML=`<div><div class="name">${t.name}</div><div class="small">${new Date(t.created_at*1000).toLocaleString()}</div></div><div class="row"><button class="btn" data-id="${t.id}" data-act="load">✏️</button><button class="btn btn-danger" data-id="${t.id}" data-act="del">🗑</button></div>`;root.appendChild(d);}root.querySelectorAll('button').forEach(b=>b.addEventListener('click',async ev=>{const id=ev.target.getAttribute('data-id');const act=ev.target.getAttribute('data-act');if(act==='del'){if(!confirm('Delete template?'))return;await fetch('/templates/delete/'+id,{method:'POST'});loadTemplates();}else{const r=await fetch('/templates/get/'+id);const t=await r.json();loadTemplateIntoForm(t);}}));}
@@ -12,66 +14,82 @@ function renderBots(list){
   if(!list || !list.length){ root.innerHTML = '<div class="small">No bots yet.</div>'; return; }
 
   list.forEach(b=>{
-    const bothClosed = (String(b.long_status||'').toLowerCase()==='closed') &&
-                       (String(b.short_status||'').toLowerCase()==='closed');
+    const long_status_text = String(b.long_status||'No trade');
+    const short_status_text = String(b.short_status||'No trade');
+    const long_closed = long_status_text.startsWith('Closed');
+    const short_closed = short_status_text.startsWith('Closed');
+    const bothClosed = long_closed && short_closed;
 
     const card = document.createElement('div');
     card.className = 'bot-card';
 
     const head = document.createElement('div');
     head.className = 'bot-head';
-
-    const left = document.createElement('div');
-    left.innerHTML = `
+    
+    // Left side of head
+    const left_head = document.createElement('div');
+    const mark_price = b.mark_price != null ? Number(b.mark_price).toFixed(5) : '-';
+    left_head.innerHTML = `
       <div class="bot-title">${b.name||'-'}</div>
       <div class="bot-meta">Coin: <b id="sym-${b.id}">${b.symbol||'-'}</b></div>
+      <div class="bot-meta">Market Price: <b class="price" id="mark-${b.id}">${mark_price}</b></div>
     `;
 
-    const right = document.createElement('div');
-    right.style.textAlign = 'right';
+    // Right side of head
+    const right_head = document.createElement('div');
+    right_head.style.textAlign = 'right';
     const __startTs = (b.started_at||b.start_time||b.start_ts||b.created_at);
     const started = (__startTs ? new Date((__startTs)*1000).toLocaleString() : (b.started_at_text||'-'));
-    right.innerHTML = `
+    
+    // Updated logic to always display sl_point if it exists
+    const long_sl_display = (b.long_sl_point != null ? `${b.long_sl_point}%` : 'N/A');
+    const short_sl_display = (b.short_sl_point != null ? `${b.short_sl_point}%` : 'N/A');
+    
+    right_head.innerHTML = `
       <div class="bot-meta">Start at: <b id="start-${b.id}">${started}</b></div>
       <div class="bot-meta">Account: <b id="acc-${b.id}">${b.account_name||b.account||'-'}</b></div>
-      `;
+      <div class="bot-meta" id="sl-points-${b.id}">Current SL: L: ${long_sl_display}, S: ${short_sl_display}</div>
+    `;
 
-    head.appendChild(left);
-    head.appendChild(right);
+    head.appendChild(left_head);
+    head.appendChild(right_head);
 
     const grid = document.createElement('div');
     grid.className = 'bot-grid';
 
-    const col1 = document.createElement('div');
-    const longState = String(b.long_status||b.long_state||'No trade');
-    const shortState = String(b.short_status||b.short_state||'No trade');
+    // --- Start of modified section ---
+    let lroi_display = Number(b.long_roi||0).toFixed(2);
+    let sroi_display = Number(b.short_roi||0).toFixed(2);
 
-    const longClass =
-      longState.toLowerCase()==='running' ? 'status-ok' :
-      longState.toLowerCase()==='closed'  ? 'status-warn' : 'status-off';
+    if (long_closed) {
+        const match = long_status_text.match(/Closed at ([-+]?\d*\.?\d+)%/);
+        if (match) lroi_display = Number(match[1]).toFixed(2);
+    }
+    if (short_closed) {
+        const match = short_status_text.match(/Closed at ([-+]?\d*\.?\d+)%/);
+        if (match) sroi_display = Number(match[1]).toFixed(2);
+    }
+    
+    const lroi_class = (lroi_display >= 0 ? 'roi-pos' : 'roi-neg');
+    const sroi_class = (sroi_display >= 0 ? 'roi-pos' : 'roi-neg');
 
-    const shortClass =
-      shortState.toLowerCase()==='running' ? 'status-ok' :
-      shortState.toLowerCase()==='closed'  ? 'status-warn' : 'status-off';
-
-    col1.innerHTML = `
-      <div><b>Long</b> — Status: <span id="lstat-${b.id}" class="${longClass}">${longState}</span></div>
-      <div><b>Short</b> — Status: <span id="sstat-${b.id}" class="${shortClass}">${shortState}</span></div>
+    const long_row = document.createElement('div');
+    long_row.className = 'bot-row-flex';
+    long_row.innerHTML = `
+        <div><b>Long</b> — Status: <span id="lstat-${b.id}" class="${long_status_text.includes('Running') ? 'status-ok' : long_status_text.includes('Closed') ? 'status-warn' : 'status-off'}">${long_status_text}</span></div>
+        <div>ROI: <span class="roi ${lroi_class}" id="lroi-${b.id}">${lroi_display}%</span></div>
+    `;
+    
+    const short_row = document.createElement('div');
+    short_row.className = 'bot-row-flex';
+    short_row.innerHTML = `
+        <div><b>Short</b> — Status: <span id="sstat-${b.id}" class="${short_status_text.includes('Running') ? 'status-ok' : short_status_text.includes('Closed') ? 'status-warn' : 'status-off'}">${short_status_text}</span></div>
+        <div>ROI: <span class="roi ${sroi_class}" id="sroi-${b.id}">${sroi_display}%</span></div>
     `;
 
-    const col2 = document.createElement('div');
-    const mark = (b.mark_price!=null? b.mark_price : (b.price||'-'));
-    const lroi = Number(b.long_roi||0);
-    const sroi = Number(b.short_roi||0);
-
-    col2.innerHTML = `
-      <div>Market Price: <span class="price" id="mark-${b.id}">${mark}</span></div>
-      <div>ROI (Long): <span class="roi ${ lroi>=0 ? 'roi-pos':'roi-neg' }" id="lroi-${b.id}">${lroi.toFixed(2)}%</span></div>
-      <div>ROI (Short): <span class="roi ${ sroi>=0 ? 'roi-pos':'roi-neg' }" id="sroi-${b.id}">${sroi.toFixed(2)}%</span></div>
-    `;
-
-    grid.appendChild(col1);
-    grid.appendChild(col2);
+    grid.appendChild(long_row);
+    grid.appendChild(short_row);
+    // --- End of modified section ---
 
     const foot = document.createElement('div');
     foot.style.marginTop = '12px';
@@ -84,12 +102,12 @@ function renderBots(list){
         const r = await fetch('/bots/close/'+b.id, {method:'POST'});
         try { await r.json(); } catch(e){}
         btn.disabled = false;
-        await refreshBots();
+        await refreshBots(currentPage);
       });
       foot.appendChild(btn);
     } else {
       const btn = document.createElement('button');
-      btn.className='btn btn-danger';
+      btn.className='btn btn-warning';
       btn.textContent='Closed';
       btn.disabled = true;
       foot.appendChild(btn);
@@ -101,7 +119,22 @@ function renderBots(list){
     root.appendChild(card);
   });
 }
-async function refreshBots(){const r=await fetch('/bots/list');const d=await r.json();renderBots(d.items||[]);}
+async function refreshBots(page = currentPage){
+    document.getElementById('page_info').textContent = `${page}`;
+    const r=await fetch(`/bots/list?page=${page}`);
+    const d=await r.json();
+    renderBots(d.items||[]);
+    if (d.items.length < 5) {
+        document.getElementById('btn_next').disabled = true;
+    } else {
+        document.getElementById('btn_next').disabled = false;
+    }
+    if (page === 1) {
+        document.getElementById('btn_prev').disabled = true;
+    } else {
+        document.getElementById('btn_prev').disabled = false;
+    }
+}
 document.getElementById('r_add').addEventListener('click',()=>{R_points.push(0);renderR();});
 document.getElementById('btn_save_tpl').addEventListener('click',async()=>{const body=getFormPayload();if(!body.name){alert('Bot name required');return;}await fetch('/templates/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await loadTemplates();alert('Template saved');});
 function getFormPayload(){return{name:bot_name.value.trim(),account_id:parseInt(bot_account.value||0),symbol:bot_symbol.value.trim().toUpperCase(),long_enabled:long_on.checked?1:0,long_leverage:parseInt(long_lev.value||1),long_amount:parseFloat(long_amt.value||0),short_enabled:short_on.checked?1:0,short_leverage:parseInt(short_lev.value||1),short_amount:parseFloat(short_amt.value||0),r_points:R_points,cond_sl_close:cond_sl_close.checked?1:0,cond_trailing:cond_trailing.checked?1:0,cond_close_last:cond_close_last.checked?1:0};}
@@ -113,11 +146,36 @@ function initSocket(){
     if(!p || !p.bot_id) return;
     const id = p.bot_id;
     const m = document.getElementById('mark-'+id);
-    if(m) m.textContent = (p.mark_price!=null) ? p.mark_price : '-';
-    const l = document.getElementById('lroi-'+id);
-    if(l){ const v=Number(p.long_roi||0); l.textContent=v.toFixed(2)+'%'; l.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
-    const s = document.getElementById('sroi-'+id);
-    if(s){ const v=Number(p.short_roi||0); s.textContent=v.toFixed(2)+'%'; s.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
+    const sl_el = document.getElementById('sl-points-'+id);
+
+    const longStatusEl = document.getElementById('lstat-'+id);
+    const shortStatusEl = document.getElementById('sstat-'+id);
+
+    const long_closed = longStatusEl.textContent.includes('Closed');
+    const short_closed = shortStatusEl.textContent.includes('Closed');
+    
+    // Update Market Price: Show price if at least one position is NOT closed.
+    if (!long_closed || !short_closed) {
+      if(m) m.textContent = (p.mark_price!=null) ? p.mark_price.toFixed(5) : '-';
+    } else {
+      if(m) m.textContent = '-';
+    }
+
+    // Update SL display
+    let l_sl = (p.long_sl_point != null ? `${p.long_sl_point}%` : 'N/A');
+    let s_sl = (p.short_sl_point != null ? `${p.short_sl_point}%` : 'N/A');
+    if (sl_el) sl_el.innerHTML = `Current SL: L: ${l_sl}, S: ${s_sl}`;
+
+    // Update ROI
+    if (!long_closed) {
+        const l = document.getElementById('lroi-'+id);
+        if(l){ const v=Number(p.long_roi||0); l.textContent=v.toFixed(2)+'%'; l.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
+    }
+    
+    if (!short_closed) {
+        const s = document.getElementById('sroi-'+id);
+        if(s){ const v=Number(p.short_roi||0); s.textContent=v.toFixed(2)+'%'; s.className='roi '+(v>=0?'roi-pos':'roi-neg'); }
+    }
   });
 
   sio.on('bot_status_update', p=>{

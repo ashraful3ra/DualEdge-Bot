@@ -1,4 +1,3 @@
-
 import os, sqlite3, json, time
 from contextlib import contextmanager
 
@@ -61,6 +60,8 @@ def init_db():
             short_entry_price REAL,
             long_status TEXT DEFAULT 'No trade',
             short_status TEXT DEFAULT 'No trade',
+            long_sl_point REAL,
+            short_sl_point REAL,
             testnet INTEGER DEFAULT 1
         );""")
         con.commit()
