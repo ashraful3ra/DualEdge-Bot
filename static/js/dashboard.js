@@ -3,11 +3,52 @@
 let R_points=[]; let symbolsCache=[]; let sio=null; let currentPage = 1;
 function el(tag,attrs={},children=[]){const e=document.createElement(tag);Object.entries(attrs).forEach(([k,v])=>{if(k==='class')e.className=v;else if(k==='html')e.innerHTML=v;else e.setAttribute(k,v);});children.forEach(c=>e.appendChild(c));return e;}
 function renderR(){const root=document.getElementById('r_list');root.innerHTML='';R_points.forEach((v,i)=>{const inp=el('input',{class:'input',type:'number',step:'0.1',value:v});inp.addEventListener('input',ev=>{R_points[i]=parseFloat(ev.target.value||0)});root.appendChild(inp);});}
-function renderTemplates(items){const root=document.getElementById('tpl_list');root.innerHTML='';if(!items.length){root.innerHTML='<div class="small">No templates</div>';return;}for(const t of items){const d=el('div',{class:'list-item'});d.innerHTML=`<div><div class="name">${t.name}</div><div class="small">${new Date(t.created_at*1000).toLocaleString()}</div></div><div class="row"><button class="btn" data-id="${t.id}" data-act="load">✏️</button><button class="btn btn-danger" data-id="${t.id}" data-act="del">🗑</button></div>`;root.appendChild(d);}root.querySelectorAll('button').forEach(b=>b.addEventListener('click',async ev=>{const id=ev.target.getAttribute('data-id');const act=ev.target.getAttribute('data-act');if(act==='del'){if(!confirm('Delete template?'))return;await fetch('/templates/delete/'+id,{method:'POST'});loadTemplates();}else{const r=await fetch('/templates/get/'+id);const t=await r.json();loadTemplateIntoForm(t);}}));}
+function renderTemplates(items){const root=document.getElementById('tpl_list');root.innerHTML='';if(!items.length){root.innerHTML='<div class="small">No templates</div>';return;}for(const t of items){const d=el('div',{class:'list-item'});d.innerHTML=`<div><div class="name">${t.name}</div><div class="small">${new Date(t.created_at*1000).toLocaleString()}</div></div><div class="row"><button class="btn" data-id="${t.id}" data-act="load"><i class="fas fa-edit"></i></button><button class="btn btn-danger" data-id="${t.id}" data-act="del"><i class="fas fa-trash-alt"></i></button></div>`;root.appendChild(d);}root.querySelectorAll('button').forEach(b=>b.addEventListener('click',async ev=>{const btn=ev.target.closest('button');const id=btn.getAttribute('data-id');const act=btn.getAttribute('data-act');if(act==='del'){if(!confirm('Delete template?'))return;await fetch('/templates/delete/'+id,{method:'POST'});loadTemplates();}else{const r=await fetch('/templates/get/'+id);const t=await r.json();loadTemplateIntoForm(t);}}));}
 function loadTemplateIntoForm(t){bot_name.value=t.name;bot_symbol.value=t.symbol||'';long_on.checked=!!t.long_enabled;short_on.checked=!!t.short_enabled;long_lev.value=t.long_leverage||1;short_lev.value=t.short_leverage||1;long_amt.value=t.long_amount||0;short_amt.value=t.short_amount||0;R_points=(t.r_points||[]);renderR();cond_sl_close.checked=!!t.cond_sl_close;cond_trailing.checked=!!t.cond_trailing;cond_close_last.checked=!!t.cond_close_last;}
 async function safeJson(r){const txt=await r.text();try{return JSON.parse(txt)}catch(e){return {__raw:txt, error:`HTTP ${r.status}`}}}
 async function fetchSymbols(){const r=await fetch('/api/futures/symbols');const d=await safeJson(r);if(d.symbols){return d.symbols;}alert('Symbol list error: '+(d.error||d.__raw||'unknown'));return [];}
-async function initSymbolSuggest(){symbolsCache=await fetchSymbols();const input=document.getElementById('bot_symbol');const list=document.getElementById('symbol_suggest');input.addEventListener('input',e=>{updateMinNotional();const q=(e.target.value||'').toUpperCase();if(!q){list.innerHTML='';return;}const matches=symbolsCache.filter(s=>s.includes(q)).slice(0,5);list.innerHTML='';matches.forEach(m=>{const li=el('div',{class:'list-item'});li.innerHTML=`<div class="name">${m}</div>`;li.addEventListener('click',()=>{input.value=m;list.innerHTML='';});list.appendChild(li);});});}
+async function initSymbolSuggest(){
+    symbolsCache = await fetchSymbols();
+    const input = document.getElementById('bot_symbol');
+    const list = document.getElementById('symbol_suggest');
+
+    input.addEventListener('input', e => {
+        updateMinNotional();
+        const q = (e.target.value || '').toUpperCase();
+        if (!q) {
+            list.innerHTML = '';
+            list.style.display = 'none'; // Hide when empty
+            return;
+        }
+        const matches = symbolsCache.filter(s => s.startsWith(q)).slice(0, 10);
+        list.innerHTML = '';
+        if (matches.length) {
+            list.style.display = 'block'; // Show when there are matches
+        } else {
+            list.style.display = 'none'; // Hide when no matches
+        }
+
+        matches.forEach(m => {
+            const li = el('div', { class: 'list-item' });
+            const regex = new RegExp(`(${q})`, 'i');
+            li.innerHTML = `<div class="name">${m.replace(regex, '<b>$1</b>')}</div>`;
+            li.addEventListener('click', () => {
+                input.value = m;
+                list.innerHTML = '';
+                list.style.display = 'none';
+                updateMinNotional();
+            });
+            list.appendChild(li);
+        });
+    });
+
+    // Hide suggestions when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!input.contains(e.target)) {
+            list.style.display = 'none';
+        }
+    });
+}
 function renderBots(list){
   const root = document.getElementById('bots_list');
   root.innerHTML = '';
@@ -189,4 +230,4 @@ async function loadTemplates(){const r=await fetch('/templates/list');const d=aw
 async function hydrateDashboard(){R_points=(window.__R_DEFAULT__||[]).slice();renderR();await initSymbolSuggest(); await updateMinNotional();await loadTemplates();await refreshBots();initSocket();}
 window.hydrateDashboard=hydrateDashboard;
 
-async function updateMinNotional(){const sym=(bot_symbol.value||'').toUpperCase();const noteL=document.getElementById('note_long');const noteS=document.getElementById('note_short');if(!sym){if(noteL)noteL.textContent='';if(noteS)noteS.textContent='';return;}try{const r=await fetch('/api/symbol-info?symbol='+encodeURIComponent(sym));const d=await r.json();if(d.min_notional!=null){const n = Number(d.min_notional||0); if(noteL) noteL.textContent = n>0 ? ('Min notional $'+n) : ''; if(noteS) noteS.textContent = n>0 ? ('Min notional $'+n) : '';} }catch(e){} }
+async function updateMinNotional(){const sym=(bot_symbol.value||'').toUpperCase();const noteL=document.getElementById('note_long');const noteS=document.getElementById('note_short');if(!sym){if(noteL)noteL.textContent='';if(noteS)noteS.textContent='';return;}try{const r=await fetch('/api/symbol-info?symbol='+encodeURIComponent(sym));const d=await r.json();if(d.min_notional!=null){const n = Number(d.min_notional||0); if(noteL) noteL.textContent = n>0 ? ('Min notional $'+n) : ''; if(noteS) noteL.textContent = n>0 ? ('Min notional $'+n) : '';} }catch(e){} }

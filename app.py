@@ -41,10 +41,12 @@ def list_templates():
 def list_bots(limit=5, offset=0):
     with connect() as con:
         cur = con.cursor()
-        cur.execute('SELECT b.*, a.name as account_name FROM bots b JOIN accounts a ON a.id=b.account_id ORDER BY id DESC LIMIT ? OFFSET ?', (limit, offset))
+        cur.execute('SELECT b.*, a.name as account_name FROM bots b LEFT JOIN accounts a ON a.id=b.account_id ORDER BY b.id DESC LIMIT ? OFFSET ?', (limit, offset))
         out = []
         for r in cur.fetchall():
             d = to_dict(r)
+            if not d.get('account_name'):
+                d['account_name'] = 'Account Deleted'
             d['r_points'] = json.loads(d['r_points_json'] or '[]')
             d['long_roi'] = 0.0
             d['short_roi'] = 0.0
@@ -57,8 +59,23 @@ def list_bots(limit=5, offset=0):
 @app.route('/')
 def home(): return redirect(url_for('dashboard'))
 
+def update_account_balances():
+    accounts = list_accounts()
+    for acc in accounts:
+        try:
+            bn = safe_get_client(acc)
+            balance = bn.futures_balance()
+            with connect() as con:
+                cur = con.cursor()
+                cur.execute('UPDATE accounts SET futures_balance=?, updated_at=? WHERE id=?', (balance, now(), acc['id']))
+                con.commit()
+        except Exception as e:
+            print(f"Could not update balance for account {acc['name']}: {e}")
+
 @app.route('/account')
-def account(): return render_template('account.html', accounts_json=json.dumps(list_accounts()))
+def account():
+    update_account_balances()
+    return render_template('account.html', accounts_json=json.dumps(list_accounts()))
 
 @app.route('/dashboard')
 def dashboard():
@@ -330,45 +347,61 @@ def process_trade_logic(bot, bn_client, mark_price):
 
     with connect() as con:
         cur = con.cursor()
+        # --- LONG ---
         if bot['long_status'] == 'Running' and bot['long_entry_price']:
             roi = compute_roi(bot['long_entry_price'], mark_price, bot['long_leverage'], 'LONG')
+
+            # Trailing SL
+            if bot['cond_trailing'] and len(tp_points) > 1:
+                highest_tp_hit = next((p for p in reversed(tp_points) if roi >= p), None)
+                if highest_tp_hit:
+                    current_tp_index = tp_points.index(highest_tp_hit)
+                    if current_tp_index > 0:
+                        new_sl_point = tp_points[current_tp_index - 1]
+                        if new_sl_point != bot.get('long_sl_point'):
+                            cur.execute("UPDATE bots SET long_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
+                            con.commit()
+                            bot['long_sl_point'] = new_sl_point
+
+            # SL Close
+            current_sl = bot.get('long_sl_point')
+            if current_sl is not None and roi <= current_sl:
+                close_position(bot, 'LONG', bn_client)
+                return
+
+            # Initial SL and Final TP close
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'LONG', bn_client)
                 return
 
+        # --- SHORT ---
+        if bot['short_status'] == 'Running' and bot['short_entry_price']:
+            roi = compute_roi(bot['short_entry_price'], mark_price, bot['short_leverage'], 'SHORT')
+
+            # Trailing SL
             if bot['cond_trailing'] and len(tp_points) > 1:
                 highest_tp_hit = next((p for p in reversed(tp_points) if roi >= p), None)
-                if highest_tp_hit and highest_tp_hit != bot.get('long_sl_point'):
+                if highest_tp_hit:
                     current_tp_index = tp_points.index(highest_tp_hit)
                     if current_tp_index > 0:
                         new_sl_point = tp_points[current_tp_index - 1]
-                        cur.execute("UPDATE bots SET long_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
-                        con.commit()
-                        bot['long_sl_point'] = new_sl_point
-                        if roi <= new_sl_point:
-                            close_position(bot, 'LONG', bn_client)
-                            return
+                        if new_sl_point != bot.get('short_sl_point'):
+                            cur.execute("UPDATE bots SET short_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
+                            con.commit()
+                            bot['short_sl_point'] = new_sl_point
+            
+            # SL Close
+            current_sl = bot.get('short_sl_point')
+            if current_sl is not None and roi <= current_sl:
+                close_position(bot, 'SHORT', bn_client)
+                return
 
-        if bot['short_status'] == 'Running' and bot['short_entry_price']:
-            roi = compute_roi(bot['short_entry_price'], mark_price, bot['short_leverage'], 'SHORT')
+            # Initial SL and Final TP close
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'SHORT', bn_client)
                 return
-
-            if bot['cond_trailing'] and len(tp_points) > 1:
-                highest_tp_hit = next((p for p in reversed(tp_points) if roi >= p), None)
-                if highest_tp_hit and highest_tp_hit != bot.get('short_sl_point'):
-                    current_tp_index = tp_points.index(highest_tp_hit)
-                    if current_tp_index > 0:
-                        new_sl_point = tp_points[current_tp_index - 1]
-                        cur.execute("UPDATE bots SET short_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
-                        con.commit()
-                        bot['short_sl_point'] = new_sl_point
-                        if roi <= new_sl_point:
-                            close_position(bot, 'SHORT', bn_client)
-                            return
 
 def start_roi_worker(bot_id):
     import websocket, json, time

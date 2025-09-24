@@ -18,7 +18,6 @@
 .switch input:checked + .dot{background:#0d3b3a;border-color:#0d3b3a}.switch input:checked + .dot::after{left:17px;background:#00d3b8}
 .kv{display:grid;grid-template-columns:130px 1fr;gap:6px;font-size:13px;color:#a9b7cf}.kv b{color:#dfe7f5}
 .roi-pos{color:#00e676}.roi-neg{color:#ff5252}
-#symbol_suggest{max-height:150px;overflow:auto;margin-top:6px}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
 
 /* === Bots card details (new) === */
@@ -60,4 +59,45 @@
 
 #page_info {
     margin: 0;
+}
+
+#r_list {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+}
+
+/* === Symbol Suggest Dropdown Improvements v2 === */
+#symbol_suggest {
+    position: absolute;
+    width: 100%;
+    background: #1c2738; /* A slightly different background */
+    border: 1px solid #3a4b6b;
+    border-top: none; /* Avoid double border with the input */
+    border-radius: 0 0 10px 10px;
+    z-index: 10;
+    max-height: 220px;
+    overflow-y: auto;
+    box-shadow: 0 10px 20px rgba(0,0,0,.2);
+    display: none; /* Initially hidden */
+}
+
+#symbol_suggest .list-item {
+    background: transparent;
+    border: none;
+    padding: 12px 15px;
+    cursor: pointer;
+    transition: background .2s ease;
+    border-radius: 0;
+}
+
+#symbol_suggest .list-item:hover {
+    background: linear-gradient(90deg, rgba(34,211,238,0.3) 0%, rgba(14,21,32,0) 100%);
+    border-left: 3px solid var(--cyan);
+    padding-left: 12px;
+}
+
+#symbol_suggest .list-item b {
+    color: var(--amber);
+    font-weight: bold; 
 }
