@@ -1,5 +1,6 @@
 import os, json, time, threading
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash
+from functools import wraps
 from flask_socketio import SocketIO
 from dotenv import load_dotenv
 from utils.db import init_db, connect, now, to_dict
@@ -11,6 +12,39 @@ load_dotenv(); init_db()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(24))
 socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
+
+# --- START: PASSWORD PROTECTION ---
+
+# Login required decorator
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        app_password = os.environ.get('APP_PASSWORD')
+        if app_password and password == app_password:
+            session['logged_in'] = True
+            session.permanent = True # Keep session for a long time
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid password!', 'danger')
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    flash('You have been logged out.', 'success')
+    return redirect(url_for('login'))
+
+# --- END: PASSWORD PROTECTION ---
+
 
 #<editor-fold desc="Helper Functions">
 def get_account(acc_id):
@@ -57,6 +91,7 @@ def list_bots(limit=5, offset=0):
 
 #<editor-fold desc="App Routes (UI)">
 @app.route('/')
+@login_required
 def home(): return redirect(url_for('dashboard'))
 
 def update_account_balances():
@@ -73,14 +108,16 @@ def update_account_balances():
             print(f"Could not update balance for account {acc['name']}: {e}")
 
 @app.route('/account')
+@login_required
 def account():
     update_account_balances()
     return render_template('account.html', accounts_json=json.dumps(list_accounts()))
 
 @app.route('/dashboard')
+@login_required
 def dashboard():
     accts=list_accounts(); tpls=list_templates()
-    r_default = [-20, 10, 15, 20, 25] # Moved from JS
+    r_default = [-20, 10, 15, 20, 25]
     return render_template('dashboard.html', accounts=accts, accounts_json=json.dumps(accts), templates_json=json.dumps(tpls), r_default_json=json.dumps(r_default))
 #</editor-fold>
 
@@ -197,7 +234,6 @@ def bots_submit():
         if short_enabled and short_amount < max(minN, 0): return jsonify({'error': f'Short amount (${short_amount}) is below min notional (${minN}).'}), 400
         
         bn.set_margin_type(symbol, margin_mode)
-        # Fix: Set leverage for both positions if enabled
         if long_enabled: bn.set_leverage(symbol, long_leverage)
         if short_enabled: bn.set_leverage(symbol, short_leverage)
 
@@ -220,13 +256,11 @@ def bots_submit():
             short_entry=price
     except Exception as e: return jsonify({'error': f'Order place failed: {e}'}), 400
     
-    # Fix: Ensure entry price is the same for both long and short
     entry_price = long_entry or short_entry
     if long_enabled and short_enabled:
         long_entry = entry_price
         short_entry = entry_price
 
-    # New code to set initial stop loss points
     sl_point = None
     if cond_sl_close:
         sl_points = sorted([p for p in r_points if p < 0], reverse=True)
@@ -289,14 +323,14 @@ def close_position(bot, position_side_to_close, bn_client):
             amt = float(p.get('positionAmt', 0))
             side = p.get('positionSide')
 
-            if side == 'BOTH': # One-way mode
+            if side == 'BOTH':
                 if position_side_to_close == 'LONG' and amt > 0:
                     position_to_close = p
                     break
                 if position_side_to_close == 'SHORT' and amt < 0:
                     position_to_close = p
                     break
-            elif side == position_side_to_close and amt != 0: # Hedge mode
+            elif side == position_side_to_close and amt != 0:
                 position_to_close = p
                 break
         
@@ -343,7 +377,6 @@ def process_trade_logic(bot, bn_client, mark_price):
     sl_points = sorted([p for p in r_points if p < 0], reverse=True)
     tp_points = sorted([p for p in r_points if p > 0])
     
-    # Ensure SL points are initialized in the bot dictionary for local checks
     if 'long_sl_point' not in bot: bot['long_sl_point'] = None
     if 'short_sl_point' not in bot: bot['short_sl_point'] = None
 
@@ -353,33 +386,25 @@ def process_trade_logic(bot, bn_client, mark_price):
         if bot['long_status'] == 'Running' and bot['long_entry_price']:
             roi = compute_roi(bot['long_entry_price'], mark_price, bot['long_leverage'], 'LONG')
 
-            # === START: UPDATED TRAILING SL LOGIC ===
             if bot['cond_trailing'] and len(tp_points) > 1:
                 potential_new_sl = None
-                # Iterate through TP points in reverse (e.g., R5, R4, R3...) to find the highest one hit
                 for i in range(len(tp_points) - 1, 0, -1):
-                    # tp_points[i] is the TP level to check (e.g., R3)
-                    # tp_points[i-1] is the potential new SL (e.g., R2)
                     if roi >= tp_points[i]:
                         potential_new_sl = tp_points[i-1]
-                        break # Found the highest applicable SL, no need to check lower TPs
+                        break
                 
                 if potential_new_sl is not None:
                     current_sl = bot.get('long_sl_point')
-                    # Only update the SL in the database if the new SL is higher than the current one
                     if current_sl is None or potential_new_sl > current_sl:
                         cur.execute("UPDATE bots SET long_sl_point=? WHERE id=?", (potential_new_sl, bot['id']))
                         con.commit()
-                        bot['long_sl_point'] = potential_new_sl # Update local bot dict as well
-            # === END: UPDATED TRAILING SL LOGIC ===
+                        bot['long_sl_point'] = potential_new_sl
 
-            # SL Close check
             current_sl = bot.get('long_sl_point')
             if current_sl is not None and roi <= current_sl:
                 close_position(bot, 'LONG', bn_client)
                 return
 
-            # Initial SL and Final TP close conditions
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'LONG', bn_client)
@@ -389,7 +414,6 @@ def process_trade_logic(bot, bn_client, mark_price):
         if bot['short_status'] == 'Running' and bot['short_entry_price']:
             roi = compute_roi(bot['short_entry_price'], mark_price, bot['short_leverage'], 'SHORT')
 
-            # === START: UPDATED TRAILING SL LOGIC ===
             if bot['cond_trailing'] and len(tp_points) > 1:
                 potential_new_sl = None
                 for i in range(len(tp_points) - 1, 0, -1):
@@ -403,15 +427,12 @@ def process_trade_logic(bot, bn_client, mark_price):
                         cur.execute("UPDATE bots SET short_sl_point=? WHERE id=?", (potential_new_sl, bot['id']))
                         con.commit()
                         bot['short_sl_point'] = potential_new_sl
-            # === END: UPDATED TRAILING SL LOGIC ===
             
-            # SL Close check
             current_sl = bot.get('short_sl_point')
             if current_sl is not None and roi <= current_sl:
                 close_position(bot, 'SHORT', bn_client)
                 return
 
-            # Initial SL and Final TP close conditions
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'SHORT', bn_client)
@@ -437,7 +458,6 @@ def start_roi_worker(bot_id):
             with connect() as con:
                 r = con.cursor().execute("SELECT long_status, short_status, long_sl_point, short_sl_point FROM bots WHERE id=?", (bot_id,)).fetchone()
                 if r: 
-                    # Refresh bot data with the latest from DB before processing logic
                     bot_data['long_status'] = r['long_status']
                     bot_data['short_status'] = r['short_status']
                     bot_data['long_sl_point'] = r['long_sl_point']
