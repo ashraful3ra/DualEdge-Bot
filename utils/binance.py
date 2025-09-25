@@ -72,13 +72,14 @@ class BinanceUM:
 
                 response_json = r.json()
 
-                if isinstance(response_json, dict) and response_json.get('code'):
+                if r.status_code >= 400:
                     raise Exception(f"Binance API Error: {response_json.get('msg')} (Code: {response_json.get('code')})")
 
-                if r.status_code == 200:
-                    return response_json
-                else:
-                    r.raise_for_status()
+                if isinstance(response_json, dict) and response_json.get('code') and response_json.get('code') != 200:
+                    raise Exception(f"Binance API Error: {response_json.get('msg')} (Code: {response_json.get('code')})")
+                
+                return response_json
+
 
             except (requests.exceptions.RequestException) as e:
                 print(f"Request failed due to network error: {e}. Attempt {i + 1}/{retries}.")
@@ -96,6 +97,12 @@ class BinanceUM:
     def time(self): return self._request('GET','/fapi/v1/time')
 
     # Signed
+    def get_user_trades(self, symbol, start_time=None, limit=10):
+        params = {'symbol': symbol, 'limit': limit}
+        if start_time:
+            params['startTime'] = start_time
+        return self._request('GET', '/fapi/v1/userTrades', params, signed=True)
+
     def futures_balance(self):
         data=self._request('GET','/fapi/v2/balance', signed=True)
         for a in data:
@@ -135,7 +142,6 @@ class BinanceUM:
             d=self._request('GET','/fapi/v1/positionSide/dual', signed=True)
             return bool(d.get('dualSidePosition'))
         except Exception:
-            # Fix: Return False or re-raise on error
             return False
 
     def order_market(self, symbol, side, quantity, position_side=None, reduce_only=False):
@@ -169,7 +175,6 @@ class BinanceUM:
                         step=float(f.get('stepSize')); minQ=float(f.get('minQty'))
                         precision=max(0, str(step)[::-1].find('.'))
                         if step>=1: precision=0
-                        # Fix: Correctly round quantity to be a multiple of step size and not below minQty
                         q = round(qty / step) * step
                         q = max(q, minQ)
                         return float(f"{q:.{precision}f}")

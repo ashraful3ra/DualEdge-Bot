@@ -1,4 +1,4 @@
-import os, json, time, threading
+import os, json, time, threading, ssl
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash
 from functools import wraps
 from flask_socketio import SocketIO
@@ -15,7 +15,6 @@ socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
 
 # --- START: PASSWORD PROTECTION ---
 
-# Login required decorator
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -31,7 +30,7 @@ def login():
         app_password = os.environ.get('APP_PASSWORD')
         if app_password and password == app_password:
             session['logged_in'] = True
-            session.permanent = True # Keep session for a long time
+            session.permanent = True
             return redirect(url_for('dashboard'))
         else:
             flash('Invalid password!', 'danger')
@@ -82,8 +81,10 @@ def list_bots(limit=5, offset=0):
             if not d.get('account_name'):
                 d['account_name'] = 'Account Deleted'
             d['r_points'] = json.loads(d['r_points_json'] or '[]')
-            d['long_roi'] = 0.0
-            d['short_roi'] = 0.0
+            
+            d['long_roi'] = d.get('long_final_roi', 0.0) if 'Closed' in d.get('long_status', '') else 0.0
+            d['short_roi'] = d.get('short_final_roi', 0.0) if 'Closed' in d.get('short_status', '') else 0.0
+            
             d['mark_price'] = None
             out.append(d)
         return out
@@ -117,8 +118,7 @@ def account():
 @login_required
 def dashboard():
     accts=list_accounts(); tpls=list_templates()
-    r_default = [-20, 10, 15, 20, 25]
-    return render_template('dashboard.html', accounts=accts, accounts_json=json.dumps(accts), templates_json=json.dumps(tpls), r_default_json=json.dumps(r_default))
+    return render_template('dashboard.html', accounts=accts, accounts_json=json.dumps(accts), templates_json=json.dumps(tpls))
 #</editor-fold>
 
 #<editor-fold desc="API Routes">
@@ -212,9 +212,11 @@ def bots_submit():
     name=data.get('name','').strip(); symbol=data.get('symbol','').upper(); account_id=int(data.get('account_id') or 0)
     margin_mode = data.get('margin_mode', 'ISOLATED').upper()
     long_enabled=int(bool(data.get('long_enabled'))); short_enabled=int(bool(data.get('short_enabled')))
-    long_leverage=int(data.get('long_leverage') or 1); short_leverage=int(data.get('short_leverage') or 1)
+    long_leverage=int(data.get('long_leverage') or 0); short_leverage=int(data.get('short_leverage') or 0)
     long_amount=float(data.get('long_amount') or 0); short_amount=float(data.get('short_amount') or 0)
-    r_points=data.get('r_points') or []; cond_sl_close=int(bool(data.get('cond_sl_close'))); cond_trailing=int(bool(data.get('cond_trailing'))); cond_close_last=int(bool(data.get('cond_close_last')))
+    r_points_raw=data.get('r_points', [])
+    r_points = [p for p in r_points_raw if p is not None]
+    cond_sl_close=int(bool(data.get('cond_sl_close'))); cond_trailing=int(bool(data.get('cond_trailing'))); cond_close_last=int(bool(data.get('cond_close_last')))
     
     if not name or not symbol or not account_id: return jsonify({'error':'Missing required fields'}),400
     if not long_enabled and not short_enabled: return jsonify({'error':'Enable Long and/or Short'}),400
@@ -246,12 +248,12 @@ def bots_submit():
     try:
         if long_enabled and long_amount > 0:
             qty=bn.round_lot_size(symbol, long_amount/price)
-            position_side = 'LONG' if is_hedge_mode else None
+            position_side = 'LONG' if is_hedge_mode else 'BOTH'
             bn.order_market(symbol, 'BUY', qty, position_side)
             long_entry=price
         if short_enabled and short_amount > 0:
             qty=bn.round_lot_size(symbol, short_amount/price)
-            position_side = 'SHORT' if is_hedge_mode else None
+            position_side = 'SHORT' if is_hedge_mode else 'BOTH'
             bn.order_market(symbol, 'SELL', qty, position_side)
             short_entry=price
     except Exception as e: return jsonify({'error': f'Order place failed: {e}'}), 400
@@ -268,8 +270,8 @@ def bots_submit():
             sl_point = sl_points[0]
 
     with connect() as con:
-        cur=con.cursor(); cur.execute('INSERT INTO bots (name, account_id, symbol, long_enabled, long_amount, long_leverage, short_enabled, short_amount, short_leverage, r_points_json, cond_sl_close, cond_trailing, cond_close_last, start_time, long_entry_price, short_entry_price, long_status, short_status, long_sl_point, short_sl_point, testnet) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (name,account_id,symbol,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,json.dumps(r_points),cond_sl_close,cond_trailing,cond_close_last,now(),long_entry,short_entry,'Running' if long_enabled and long_amount>0 else 'No trade','Running' if short_enabled and short_amount>0 else 'No trade',sl_point if long_enabled else None, sl_point if short_enabled else None, acc['testnet']))
+        cur=con.cursor(); cur.execute('INSERT INTO bots (name, account_id, symbol, long_enabled, long_amount, long_leverage, short_enabled, short_amount, short_leverage, r_points_json, cond_sl_close, cond_trailing, cond_close_last, start_time, long_entry_price, short_entry_price, long_status, short_status, long_sl_point, short_sl_point, testnet, long_final_roi, short_final_roi) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (name,account_id,symbol,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,json.dumps(r_points),cond_sl_close,cond_trailing,cond_close_last,now(),long_entry,short_entry,'Running' if long_enabled and long_amount>0 else 'No trade','Running' if short_enabled and short_amount>0 else 'No trade',sl_point if long_enabled else None, sl_point if short_enabled else None, acc['testnet'],0.0,0.0))
         bot_id=cur.lastrowid; con.commit()
     
     start_roi_worker(bot_id)
@@ -306,7 +308,7 @@ def close_position(bot, position_side_to_close, bn_client):
     symbol = bot['symbol']
     bot_id = bot['id']
     status_field = 'long_status' if position_side_to_close == 'LONG' else 'short_status'
-    sl_field = 'long_sl_point' if position_side_to_close == 'LONG' else 'short_sl_point'
+    roi_field = 'long_final_roi' if position_side_to_close == 'LONG' else 'short_final_roi'
 
     with connect() as con:
         cur = con.cursor()
@@ -336,37 +338,42 @@ def close_position(bot, position_side_to_close, bn_client):
         
         if position_to_close:
             qty_to_close = abs(float(position_to_close.get('positionAmt', 0)))
-            entry_price = float(position_to_close.get('entryPrice', 0))
-            mark_price = float(position_to_close.get('markPrice', 0))
-            
-            lev = bot['long_leverage'] if position_side_to_close == 'LONG' else bot['short_leverage']
-            roi = compute_roi(entry_price, mark_price, lev, position_side_to_close)
-
             is_hedge_mode = position_to_close.get('positionSide') != 'BOTH'
-            
-            rounded_qty = bn_client.round_lot_size(symbol, qty_to_close)
             order_side = 'SELL' if position_side_to_close == 'LONG' else 'BUY'
             
-            print(f"Mode detected: {'Hedge' if is_hedge_mode else 'One-way'}. Placing {order_side} order for {rounded_qty} {symbol}.")
-
             if is_hedge_mode:
-                response = bn_client.order_market(symbol, order_side, rounded_qty, position_side=position_side_to_close)
+                bn_client.order_market(symbol, order_side, qty_to_close, position_side=position_side_to_close)
             else:
-                response = bn_client.order_market(symbol, order_side, rounded_qty, reduce_only=True)
+                bn_client.order_market(symbol, order_side, qty_to_close, reduce_only=True)
 
-            print(f"Binance close response for bot {bot_id} ({position_side_to_close}): {response}")
+            time.sleep(1) 
             
+            trades = bn_client.get_user_trades(symbol, start_time=int(bot['start_time'] * 1000) - 60000)
+            pnl = 0.0
+            
+            for trade in reversed(trades):
+                if float(trade['realizedPnl']) != 0 and trade['side'] == order_side and trade['positionSide'] == position_side_to_close:
+                    pnl = float(trade['realizedPnl'])
+                    break
+            
+            entry_amount = bot['long_amount'] if position_side_to_close == 'LONG' else bot['short_amount']
+            leverage = bot['long_leverage'] if position_side_to_close == 'LONG' else bot['short_leverage']
+            
+            final_roe = 0.0
+            if entry_amount > 0 and leverage > 0:
+                margin_used = entry_amount / leverage
+                if margin_used > 0:
+                    final_roe = (pnl / margin_used) * 100.0
+
             with connect() as con:
-                cur = con.cursor()
-                current_sl_point = cur.execute(f"SELECT {sl_field} FROM bots WHERE id=?", (bot_id,)).fetchone()[0]
-                cur.execute(f"UPDATE bots SET {status_field}='Closed at {roi:.2f}%', {sl_field}=? WHERE id=?", (current_sl_point, bot_id))
+                con.cursor().execute(f"UPDATE bots SET {status_field}='Closed', {roi_field}=? WHERE id=?", (final_roe, bot_id))
                 con.commit()
+
             socketio.emit('bot_status_update', {'bot_id': bot_id})
-            print(f"SUCCESS: Position {position_side_to_close} for bot {bot_id} confirmed closed and DB updated.")
+            print(f"SUCCESS: Position {position_side_to_close} for bot {bot_id} confirmed closed with ROE: {final_roe:.2f}%")
         else:
-            print(f"INFO: No open {position_side_to_close} position on exchange for bot {bot_id}. Syncing DB.")
             with connect() as con:
-                con.cursor().execute(f"UPDATE bots SET {status_field}='Closed at 0.00%' WHERE id=?", (bot_id,))
+                con.cursor().execute(f"UPDATE bots SET {status_field}='Closed' WHERE id=?", (bot_id,))
                 con.commit()
             socketio.emit('bot_status_update', {'bot_id': bot_id})
     except Exception as e:
@@ -475,17 +482,31 @@ def start_roi_worker(bot_id):
         except Exception as e:
             print(f"Error in on_message for bot {bot_id}: {e}")
 
-    def on_error(ws, err): print(f"WS Error for bot {bot_id}: {err}"); time.sleep(5)
-    def on_close(ws, status, msg): print(f"WS Closed for bot {bot_id}")
+    def on_error(ws, err):
+        print(f"WS Error for bot {bot_id}: {err}")
     
+    def on_close(ws, status_code, msg):
+        print(f"WS Closed for bot {bot_id}. Status: {status_code}. Msg: {msg}. Reconnecting...")
+        time.sleep(5)
+
     def run():
         while True:
+            print(f"Attempting to connect WebSocket for bot {bot_id}...")
             try:
-                ws = websocket.WebSocketApp(ws_url, on_message=on_message, on_error=on_error, on_close=on_close)
-                ws.run_forever(ping_interval=20, ping_timeout=10)
+                ws = websocket.WebSocketApp(
+                    ws_url, 
+                    on_message=on_message, 
+                    on_error=on_error, 
+                    on_close=on_close
+                )
+                ws.run_forever(
+                    ping_interval=20, 
+                    ping_timeout=10,
+                    sslopt={"cert_reqs": ssl.CERT_NONE}
+                )
             except Exception as e:
                 print(f"Websocket connection failed for bot {bot_id}: {e}")
-                time.sleep(5)
+                time.sleep(10)
             
     th = threading.Thread(target=run, daemon=True); th.start()
     with ROI_LOCK: ROI_THREADS[bot_id] = th
