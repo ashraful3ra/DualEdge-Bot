@@ -10,7 +10,7 @@
 <body>
     <div class="navbar">
         <div class="container navbar-inner">
-            <a href="/" class="logo"><img src="{{ url_for('static', filename='images/logo.png') }}" alt="logo" height="24"></a>
+            <a href="/" class="logo"><img src="{{ url_for('static', filename='images/logo.png') }}" alt="logo" height="40"></a>
             <div class="nav">
                 <a href="{{ url_for('dashboard') }}" class="{{ 'active' if active_page == 'dashboard' else '' }}">Dashboard</a>
                 <a href="{{ url_for('account') }}" class="{{ 'active' if active_page == 'account' else '' }}">Account</a>
