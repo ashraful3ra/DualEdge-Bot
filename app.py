@@ -173,6 +173,7 @@ def bots_list():
 def bots_submit():
     data=request.get_json(force=True)
     name=data.get('name','').strip(); symbol=data.get('symbol','').upper(); account_id=int(data.get('account_id') or 0)
+    margin_mode = data.get('margin_mode', 'ISOLATED').upper()
     long_enabled=int(bool(data.get('long_enabled'))); short_enabled=int(bool(data.get('short_enabled')))
     long_leverage=int(data.get('long_leverage') or 1); short_leverage=int(data.get('short_leverage') or 1)
     long_amount=float(data.get('long_amount') or 0); short_amount=float(data.get('short_amount') or 0)
@@ -195,7 +196,7 @@ def bots_submit():
         if long_enabled and long_amount < max(minN, 0): return jsonify({'error': f'Long amount (${long_amount}) is below min notional (${minN}).'}), 400
         if short_enabled and short_amount < max(minN, 0): return jsonify({'error': f'Short amount (${short_amount}) is below min notional (${minN}).'}), 400
         
-        bn.set_margin_isolated(symbol)
+        bn.set_margin_type(symbol, margin_mode)
         # Fix: Set leverage for both positions if enabled
         if long_enabled: bn.set_leverage(symbol, long_leverage)
         if short_enabled: bn.set_leverage(symbol, short_leverage)
@@ -342,6 +343,7 @@ def process_trade_logic(bot, bn_client, mark_price):
     sl_points = sorted([p for p in r_points if p < 0], reverse=True)
     tp_points = sorted([p for p in r_points if p > 0])
     
+    # Ensure SL points are initialized in the bot dictionary for local checks
     if 'long_sl_point' not in bot: bot['long_sl_point'] = None
     if 'short_sl_point' not in bot: bot['short_sl_point'] = None
 
@@ -351,25 +353,33 @@ def process_trade_logic(bot, bn_client, mark_price):
         if bot['long_status'] == 'Running' and bot['long_entry_price']:
             roi = compute_roi(bot['long_entry_price'], mark_price, bot['long_leverage'], 'LONG')
 
-            # Trailing SL
+            # === START: UPDATED TRAILING SL LOGIC ===
             if bot['cond_trailing'] and len(tp_points) > 1:
-                highest_tp_hit = next((p for p in reversed(tp_points) if roi >= p), None)
-                if highest_tp_hit:
-                    current_tp_index = tp_points.index(highest_tp_hit)
-                    if current_tp_index > 0:
-                        new_sl_point = tp_points[current_tp_index - 1]
-                        if new_sl_point != bot.get('long_sl_point'):
-                            cur.execute("UPDATE bots SET long_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
-                            con.commit()
-                            bot['long_sl_point'] = new_sl_point
+                potential_new_sl = None
+                # Iterate through TP points in reverse (e.g., R5, R4, R3...) to find the highest one hit
+                for i in range(len(tp_points) - 1, 0, -1):
+                    # tp_points[i] is the TP level to check (e.g., R3)
+                    # tp_points[i-1] is the potential new SL (e.g., R2)
+                    if roi >= tp_points[i]:
+                        potential_new_sl = tp_points[i-1]
+                        break # Found the highest applicable SL, no need to check lower TPs
+                
+                if potential_new_sl is not None:
+                    current_sl = bot.get('long_sl_point')
+                    # Only update the SL in the database if the new SL is higher than the current one
+                    if current_sl is None or potential_new_sl > current_sl:
+                        cur.execute("UPDATE bots SET long_sl_point=? WHERE id=?", (potential_new_sl, bot['id']))
+                        con.commit()
+                        bot['long_sl_point'] = potential_new_sl # Update local bot dict as well
+            # === END: UPDATED TRAILING SL LOGIC ===
 
-            # SL Close
+            # SL Close check
             current_sl = bot.get('long_sl_point')
             if current_sl is not None and roi <= current_sl:
                 close_position(bot, 'LONG', bn_client)
                 return
 
-            # Initial SL and Final TP close
+            # Initial SL and Final TP close conditions
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'LONG', bn_client)
@@ -379,25 +389,29 @@ def process_trade_logic(bot, bn_client, mark_price):
         if bot['short_status'] == 'Running' and bot['short_entry_price']:
             roi = compute_roi(bot['short_entry_price'], mark_price, bot['short_leverage'], 'SHORT')
 
-            # Trailing SL
+            # === START: UPDATED TRAILING SL LOGIC ===
             if bot['cond_trailing'] and len(tp_points) > 1:
-                highest_tp_hit = next((p for p in reversed(tp_points) if roi >= p), None)
-                if highest_tp_hit:
-                    current_tp_index = tp_points.index(highest_tp_hit)
-                    if current_tp_index > 0:
-                        new_sl_point = tp_points[current_tp_index - 1]
-                        if new_sl_point != bot.get('short_sl_point'):
-                            cur.execute("UPDATE bots SET short_sl_point=? WHERE id=?", (new_sl_point, bot['id']))
-                            con.commit()
-                            bot['short_sl_point'] = new_sl_point
+                potential_new_sl = None
+                for i in range(len(tp_points) - 1, 0, -1):
+                    if roi >= tp_points[i]:
+                        potential_new_sl = tp_points[i-1]
+                        break
+                
+                if potential_new_sl is not None:
+                    current_sl = bot.get('short_sl_point')
+                    if current_sl is None or potential_new_sl > current_sl:
+                        cur.execute("UPDATE bots SET short_sl_point=? WHERE id=?", (potential_new_sl, bot['id']))
+                        con.commit()
+                        bot['short_sl_point'] = potential_new_sl
+            # === END: UPDATED TRAILING SL LOGIC ===
             
-            # SL Close
+            # SL Close check
             current_sl = bot.get('short_sl_point')
             if current_sl is not None and roi <= current_sl:
                 close_position(bot, 'SHORT', bn_client)
                 return
 
-            # Initial SL and Final TP close
+            # Initial SL and Final TP close conditions
             if (bot['cond_sl_close'] and sl_points and roi <= sl_points[0]) or \
                (bot['cond_close_last'] and tp_points and roi >= tp_points[-1]):
                 close_position(bot, 'SHORT', bn_client)
@@ -423,6 +437,7 @@ def start_roi_worker(bot_id):
             with connect() as con:
                 r = con.cursor().execute("SELECT long_status, short_status, long_sl_point, short_sl_point FROM bots WHERE id=?", (bot_id,)).fetchone()
                 if r: 
+                    # Refresh bot data with the latest from DB before processing logic
                     bot_data['long_status'] = r['long_status']
                     bot_data['short_status'] = r['short_status']
                     bot_data['long_sl_point'] = r['long_sl_point']

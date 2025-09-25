@@ -165,21 +165,24 @@ async function refreshBots(page = currentPage){
     const r=await fetch(`/bots/list?page=${page}`);
     const d=await r.json();
     renderBots(d.items||[]);
-    if (d.items.length < 5) {
-        document.getElementById('btn_next').disabled = true;
-    } else {
-        document.getElementById('btn_next').disabled = false;
-    }
-    if (page === 1) {
-        document.getElementById('btn_prev').disabled = true;
-    } else {
-        document.getElementById('btn_prev').disabled = false;
-    }
+    document.getElementById('btn_next').disabled = (d.items.length < 5);
+    document.getElementById('btn_prev').disabled = (page <= 1);
 }
 document.getElementById('r_add').addEventListener('click',()=>{R_points.push(0);renderR();});
 document.getElementById('btn_save_tpl').addEventListener('click',async()=>{const body=getFormPayload();if(!body.name){alert('Bot name required');return;}await fetch('/templates/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await loadTemplates();alert('Template saved');});
-function getFormPayload(){return{name:bot_name.value.trim(),account_id:parseInt(bot_account.value||0),symbol:bot_symbol.value.trim().toUpperCase(),long_enabled:long_on.checked?1:0,long_leverage:parseInt(long_lev.value||1),long_amount:parseFloat(long_amt.value||0),short_enabled:short_on.checked?1:0,short_leverage:parseInt(short_lev.value||1),short_amount:parseFloat(short_amt.value||0),r_points:R_points,cond_sl_close:cond_sl_close.checked?1:0,cond_trailing:cond_trailing.checked?1:0,cond_close_last:cond_close_last.checked?1:0};}
+function getFormPayload(){return{name:bot_name.value.trim(),account_id:parseInt(bot_account.value||0),symbol:bot_symbol.value.trim().toUpperCase(),margin_mode:document.getElementById('margin_mode').value,long_enabled:long_on.checked?1:0,long_leverage:parseInt(long_lev.value||1),long_amount:parseFloat(long_amt.value||0),short_enabled:short_on.checked?1:0,short_leverage:parseInt(short_lev.value||1),short_amount:parseFloat(short_amt.value||0),r_points:R_points,cond_sl_close:cond_sl_close.checked?1:0,cond_trailing:cond_trailing.checked?1:0,cond_close_last:cond_close_last.checked?1:0};}
 document.getElementById('btn_submit').addEventListener('click',async()=>{const body=getFormPayload();if(!body.name||!body.account_id||!body.symbol){alert('Name, account and symbol required');return;}if(!body.long_enabled&&!body.short_enabled){alert('Enable Long and/or Short');return;}const r=await fetch('/bots/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await safeJson(r);if(d.error||!d.ok){alert('Submit failed: '+(d.error||d.__raw||'unknown'));return;}await refreshBots();alert('Bot submitted');});
+
+document.getElementById('btn_next').addEventListener('click', () => {
+    currentPage++;
+    refreshBots(currentPage);
+});
+document.getElementById('btn_prev').addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage--;
+        refreshBots(currentPage);
+    }
+});
 
 function initSocket(){
   sio = io();
@@ -230,4 +233,4 @@ async function loadTemplates(){const r=await fetch('/templates/list');const d=aw
 async function hydrateDashboard(){R_points=(window.__R_DEFAULT__||[]).slice();renderR();await initSymbolSuggest(); await updateMinNotional();await loadTemplates();await refreshBots();initSocket();}
 window.hydrateDashboard=hydrateDashboard;
 
-async function updateMinNotional(){const sym=(bot_symbol.value||'').toUpperCase();const noteL=document.getElementById('note_long');const noteS=document.getElementById('note_short');if(!sym){if(noteL)noteL.textContent='';if(noteS)noteS.textContent='';return;}try{const r=await fetch('/api/symbol-info?symbol='+encodeURIComponent(sym));const d=await r.json();if(d.min_notional!=null){const n = Number(d.min_notional||0); if(noteL) noteL.textContent = n>0 ? ('Min notional $'+n) : ''; if(noteS) noteL.textContent = n>0 ? ('Min notional $'+n) : '';} }catch(e){} }
+async function updateMinNotional(){const sym=(bot_symbol.value||'').toUpperCase();const noteL=document.getElementById('note_long');const noteS=document.getElementById('note_short');if(!sym){if(noteL)noteL.textContent='';if(noteS)noteS.textContent='';return;}try{const r=await fetch('/api/symbol-info?symbol='+encodeURIComponent(sym));const d=await r.json();if(d.min_notional!=null){const n = Number(d.min_notional||0); if(noteL) noteL.textContent = n>0 ? ('Min notional $'+n) : ''; if(noteS) noteS.textContent = n>0 ? ('Min notional $'+n) : '';} }catch(e){} }

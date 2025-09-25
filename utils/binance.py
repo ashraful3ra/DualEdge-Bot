@@ -102,11 +102,14 @@ class BinanceUM:
             if a.get('asset')=='USDT': return float(a.get('availableBalance',0))
         return 0.0
 
-    def set_margin_isolated(self, symbol):
+    def set_margin_type(self, symbol, margin_type: str):
         try:
-            return self._request('POST','/fapi/v1/marginType',{'symbol':symbol,'marginType':'ISOLATED'}, signed=True)
+            margin_type = margin_type.upper()
+            if margin_type not in ['ISOLATED', 'CROSSED']:
+                raise ValueError("margin_type must be 'ISOLATED' or 'CROSSED'")
+            return self._request('POST','/fapi/v1/marginType',{'symbol':symbol,'marginType':margin_type}, signed=True)
         except Exception as e:
-            if 'No need to change margin type' in str(e): return {'msg':'already isolated'}
+            if 'No need to change margin type' in str(e): return {'msg':f'already {margin_type.lower()}'}
             raise
 
     def set_leverage(self, symbol, leverage):
