@@ -98,18 +98,28 @@ function renderBots(list){
     const lroi_class = (lroi_display >= 0 ? 'roi-pos' : 'roi-neg');
     const sroi_class = (sroi_display >= 0 ? 'roi-pos' : 'roi-neg');
 
+    // --- LONG ROW WITH ENTRY PRICE ---
+    const long_entry_price = b.long_entry_price ? Number(b.long_entry_price).toFixed(5) : 'N/A';
     const long_row = document.createElement('div');
     long_row.className = 'bot-row-flex';
     long_row.innerHTML = `
-        <div><b>Long</b> — Status: <span id="lstat-${b.id}" class="${long_status_text.includes('Running') ? 'status-ok' : 'status-warn'}">${long_status_text}</span></div>
-        <div>ROE: <span class="roi ${lroi_class}" id="lroi-${b.id}">${lroi_display.toFixed(2)}%</span></div>
+        <div>
+            <b>Long</b> — Status: <span id="lstat-${b.id}" class="${long_status_text.includes('Running') ? 'status-ok' : 'status-warn'}">${long_status_text}</span>
+            <span class="small" style="margin-left: 10px;">Entry: ${long_entry_price}</span>
+        </div>
+        <div>ROI: <span class="roi ${lroi_class}" id="lroi-${b.id}">${lroi_display.toFixed(2)}%</span></div>
     `;
     
+    // --- SHORT ROW WITH ENTRY PRICE ---
+    const short_entry_price = b.short_entry_price ? Number(b.short_entry_price).toFixed(5) : 'N/A';
     const short_row = document.createElement('div');
     short_row.className = 'bot-row-flex';
     short_row.innerHTML = `
-        <div><b>Short</b> — Status: <span id="sstat-${b.id}" class="${short_status_text.includes('Running') ? 'status-ok' : 'status-warn'}">${short_status_text}</span></div>
-        <div>ROE: <span class="roi ${sroi_class}" id="sroi-${b.id}">${sroi_display.toFixed(2)}%</span></div>
+        <div>
+            <b>Short</b> — Status: <span id="sstat-${b.id}" class="${short_status_text.includes('Running') ? 'status-ok' : 'status-warn'}">${short_status_text}</span>
+            <span class="small" style="margin-left: 10px;">Entry: ${short_entry_price}</span>
+        </div>
+        <div>ROI: <span class="roi ${sroi_class}" id="sroi-${b.id}">${sroi_display.toFixed(2)}%</span></div>
     `;
 
     grid.appendChild(long_row);

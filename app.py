@@ -1,4 +1,4 @@
-import os, json, time, threading, ssl
+import os, json, time, threading, ssl, socket
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, flash
 from functools import wraps
 from flask_socketio import SocketIO
@@ -241,28 +241,40 @@ def bots_submit():
 
     except Exception as e: return jsonify({'error': f'Failed to set margin/leverage: {e}'}), 400
     
-    try: price=float(bn.price(symbol)['price'])
-    except Exception as e: return jsonify({'error': f'Price fetch failed: {e}'}), 400
-    
     long_entry=None; short_entry=None
     try:
         if long_enabled and long_amount > 0:
-            qty=bn.round_lot_size(symbol, long_amount/price)
-            position_side = 'LONG' if is_hedge_mode else 'BOTH'
-            bn.order_market(symbol, 'BUY', qty, position_side)
-            long_entry=price
+            price = float(bn.price(symbol)['price'])
+            qty = bn.round_lot_size(symbol, long_amount / price)
+            if is_hedge_mode:
+                bn.order_market(symbol, 'BUY', qty, position_side='LONG')
+            else:
+                bn.order_market(symbol, 'BUY', qty)
+            
+            time.sleep(0.5) # Wait for trade to register on Binance
+            last_trade = bn.get_user_trades(symbol, limit=1)
+            if last_trade:
+                long_entry = float(last_trade[0].get('price', price))
+            else:
+                long_entry = price # Fallback to fetched price
+
         if short_enabled and short_amount > 0:
-            qty=bn.round_lot_size(symbol, short_amount/price)
-            position_side = 'SHORT' if is_hedge_mode else 'BOTH'
-            bn.order_market(symbol, 'SELL', qty, position_side)
-            short_entry=price
+            price = float(bn.price(symbol)['price'])
+            qty = bn.round_lot_size(symbol, short_amount / price)
+            if is_hedge_mode:
+                bn.order_market(symbol, 'SELL', qty, position_side='SHORT')
+            else:
+                bn.order_market(symbol, 'SELL', qty)
+            
+            time.sleep(0.5) # Wait for trade to register on Binance
+            last_trade = bn.get_user_trades(symbol, limit=1)
+            if last_trade:
+                short_entry = float(last_trade[0].get('price', price))
+            else:
+                short_entry = price # Fallback to fetched price
+            
     except Exception as e: return jsonify({'error': f'Order place failed: {e}'}), 400
     
-    entry_price = long_entry or short_entry
-    if long_enabled and short_enabled:
-        long_entry = entry_price
-        short_entry = entry_price
-
     sl_point = None
     if cond_sl_close:
         sl_points = sorted([p for p in r_points if p < 0], reverse=True)
@@ -359,18 +371,18 @@ def close_position(bot, position_side_to_close, bn_client):
             entry_amount = bot['long_amount'] if position_side_to_close == 'LONG' else bot['short_amount']
             leverage = bot['long_leverage'] if position_side_to_close == 'LONG' else bot['short_leverage']
             
-            final_roe = 0.0
+            final_roi = 0.0
             if entry_amount > 0 and leverage > 0:
                 margin_used = entry_amount / leverage
                 if margin_used > 0:
-                    final_roe = (pnl / margin_used) * 100.0
+                    final_roi = (pnl / margin_used) * 100.0
 
             with connect() as con:
-                con.cursor().execute(f"UPDATE bots SET {status_field}='Closed', {roi_field}=? WHERE id=?", (final_roe, bot_id))
+                con.cursor().execute(f"UPDATE bots SET {status_field}='Closed', {roi_field}=? WHERE id=?", (final_roi, bot_id))
                 con.commit()
 
             socketio.emit('bot_status_update', {'bot_id': bot_id})
-            print(f"SUCCESS: Position {position_side_to_close} for bot {bot_id} confirmed closed with ROE: {final_roe:.2f}%")
+            print(f"SUCCESS: Position {position_side_to_close} for bot {bot_id} confirmed closed with ROI: {final_roi:.2f}%")
         else:
             with connect() as con:
                 con.cursor().execute(f"UPDATE bots SET {status_field}='Closed' WHERE id=?", (bot_id,))
