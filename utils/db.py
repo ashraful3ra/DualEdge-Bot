@@ -1,7 +1,7 @@
 import sqlite3, os, time
 
 DB_FILE = os.path.join('data', 'app.db')
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5 # Incremented schema version
 
 def now(): return int(time.time())
 
@@ -63,6 +63,7 @@ def init_db():
             long_sl_point REAL,
             short_sl_point REAL,
             testnet INTEGER,
+            margin_type TEXT DEFAULT 'ISOLATED',
             long_final_roi REAL DEFAULT 0.0,
             short_final_roi REAL DEFAULT 0.0
         );""")
@@ -82,7 +83,13 @@ def init_db():
             cond_close_last INTEGER,
             created_at INTEGER
         );""")
-    
+
+    if current_version < 5:
+        try:
+            cur.execute("ALTER TABLE templates ADD COLUMN margin_type TEXT DEFAULT 'ISOLATED'")
+        except: # Fails if column already exists
+            pass
+
     if current_version == 0:
         cur.execute("INSERT INTO schema_version (version) VALUES (?);", (SCHEMA_VERSION,))
     else:

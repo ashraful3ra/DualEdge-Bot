@@ -175,9 +175,10 @@ def futures_symbols():
 def tpl_save():
     data=request.get_json(force=True); name=data.get('name','').strip()
     if not name: return jsonify({'error':'Name required'}),400
+    margin_mode = data.get('margin_mode', 'ISOLATED').upper()
     with connect() as con:
-        cur=con.cursor(); cur.execute('INSERT INTO templates (name,symbol,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,r_points_json,cond_sl_close,cond_trailing,cond_close_last,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (name,data.get('symbol','').upper(),int(bool(data.get('long_enabled'))),float(data.get('long_amount') or 0),int(data.get('long_leverage') or 1),
+        cur=con.cursor(); cur.execute('INSERT INTO templates (name,symbol,margin_type,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,r_points_json,cond_sl_close,cond_trailing,cond_close_last,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (name,data.get('symbol','').upper(),margin_mode,int(bool(data.get('long_enabled'))),float(data.get('long_amount') or 0),int(data.get('long_leverage') or 1),
              int(bool(data.get('short_enabled'))),float(data.get('short_amount') or 0),int(data.get('short_leverage') or 1),
              json.dumps(data.get('r_points') or []),int(bool(data.get('cond_sl_close'))),int(bool(data.get('cond_trailing'))),int(bool(data.get('cond_close_last'))),now()))
         con.commit()
@@ -251,12 +252,12 @@ def bots_submit():
             else:
                 bn.order_market(symbol, 'BUY', qty)
             
-            time.sleep(0.5) # Wait for trade to register on Binance
+            time.sleep(0.5)
             last_trade = bn.get_user_trades(symbol, limit=1)
             if last_trade:
                 long_entry = float(last_trade[0].get('price', price))
             else:
-                long_entry = price # Fallback to fetched price
+                long_entry = price
 
         if short_enabled and short_amount > 0:
             price = float(bn.price(symbol)['price'])
@@ -266,12 +267,12 @@ def bots_submit():
             else:
                 bn.order_market(symbol, 'SELL', qty)
             
-            time.sleep(0.5) # Wait for trade to register on Binance
+            time.sleep(0.5)
             last_trade = bn.get_user_trades(symbol, limit=1)
             if last_trade:
                 short_entry = float(last_trade[0].get('price', price))
             else:
-                short_entry = price # Fallback to fetched price
+                short_entry = price
             
     except Exception as e: return jsonify({'error': f'Order place failed: {e}'}), 400
     
@@ -282,8 +283,8 @@ def bots_submit():
             sl_point = sl_points[0]
 
     with connect() as con:
-        cur=con.cursor(); cur.execute('INSERT INTO bots (name, account_id, symbol, long_enabled, long_amount, long_leverage, short_enabled, short_amount, short_leverage, r_points_json, cond_sl_close, cond_trailing, cond_close_last, start_time, long_entry_price, short_entry_price, long_status, short_status, long_sl_point, short_sl_point, testnet, long_final_roi, short_final_roi) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (name,account_id,symbol,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,json.dumps(r_points),cond_sl_close,cond_trailing,cond_close_last,now(),long_entry,short_entry,'Running' if long_enabled and long_amount>0 else 'No trade','Running' if short_enabled and short_amount>0 else 'No trade',sl_point if long_enabled else None, sl_point if short_enabled else None, acc['testnet'],0.0,0.0))
+        cur=con.cursor(); cur.execute('INSERT INTO bots (name, account_id, symbol, long_enabled, long_amount, long_leverage, short_enabled, short_amount, short_leverage, r_points_json, cond_sl_close, cond_trailing, cond_close_last, start_time, long_entry_price, short_entry_price, long_status, short_status, long_sl_point, short_sl_point, testnet, long_final_roi, short_final_roi, margin_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (name,account_id,symbol,long_enabled,long_amount,long_leverage,short_enabled,short_amount,short_leverage,json.dumps(r_points),cond_sl_close,cond_trailing,cond_close_last,now(),long_entry,short_entry,'Running' if long_enabled and long_amount>0 else 'No trade','Running' if short_enabled and short_amount>0 else 'No trade',sl_point if long_enabled else None, sl_point if short_enabled else None, acc['testnet'],0.0,0.0,margin_mode))
         bot_id=cur.lastrowid; con.commit()
     
     start_roi_worker(bot_id)
@@ -394,7 +395,7 @@ def close_position(bot, position_side_to_close, bn_client):
 def process_trade_logic(bot, bn_client, mark_price):
     r_points = json.loads(bot['r_points_json'] or '[]')
     sl_points = sorted([p for p in r_points if p < 0], reverse=True)
-    tp_points = sorted([p for p in r_points if p > 0])
+    tp_points = sorted([p for p in r_points if p >= 0]) # Includes 0
     
     if 'long_sl_point' not in bot: bot['long_sl_point'] = None
     if 'short_sl_point' not in bot: bot['short_sl_point'] = None
