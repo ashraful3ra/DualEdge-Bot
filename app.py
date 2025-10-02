@@ -60,12 +60,14 @@ def safe_get_client(acc):
 
 def list_accounts():
     with connect() as con:
-        cur=con.cursor(); cur.execute('SELECT * FROM accounts ORDER BY id DESC')
+        cur=con.cursor(); 
+        cur.execute('SELECT * FROM accounts ORDER BY id DESC')
         return [to_dict(r) for r in cur.fetchall()]
 
 def list_templates():
     with connect() as con:
-        cur=con.cursor(); cur.execute('SELECT * FROM templates ORDER BY id DESC')
+        cur=con.cursor(); 
+        cur.execute('SELECT * FROM templates ORDER BY id DESC')
         out=[]
         for r in cur.fetchall():
             d=to_dict(r); d['r_points']=json.loads(d['r_points_json'] or '[]'); out.append(d)
@@ -190,7 +192,9 @@ def tpl_list(): return jsonify({'items':list_templates()})
 @app.route('/templates/get/<int:tpl_id>')
 def tpl_get(tpl_id):
     with connect() as con:
-        cur=con.cursor(); cur.execute('SELECT * FROM templates WHERE id=?',(tpl_id,)); r=cur.fetchone()
+        cur=con.cursor(); 
+        cur.execute('SELECT * FROM templates WHERE id=?',(tpl_id,))
+        r=cur.fetchone()
         if not r: return jsonify({'error':'Not found'}),404
         d=to_dict(r); d['r_points']=json.loads(d['r_points_json'] or '[]'); return jsonify(d)
 
@@ -293,7 +297,9 @@ def bots_submit():
 @app.route('/bots/close/<int:bot_id>', methods=['POST'])
 def bots_close_route(bot_id):
     with connect() as con:
-        cur=con.cursor(); cur.execute('SELECT * FROM bots WHERE id=?',(bot_id,)); r=cur.fetchone()
+        cur=con.cursor(); 
+        cur.execute('SELECT * FROM bots WHERE id=?',(bot_id,))
+        r=cur.fetchone()
         if not r: return jsonify({'error':'Not found'}),404
         bot=to_dict(r)
     
@@ -325,7 +331,10 @@ def close_position(bot, position_side_to_close, bn_client):
 
     with connect() as con:
         cur = con.cursor()
-        current_status = cur.execute(f"SELECT {status_field} FROM bots WHERE id=?", (bot_id,)).fetchone()[0]
+        cur.execute(f"SELECT {status_field} FROM bots WHERE id=?", (bot_id,))
+        r = cur.fetchone()
+        # Using column name for DictCursor
+        current_status = r[status_field] 
         if 'Closed' in current_status:
             return
 
@@ -462,7 +471,9 @@ def start_roi_worker(bot_id):
     import websocket, json, time
     
     with connect() as con:
-        r = con.cursor().execute('SELECT * FROM bots WHERE id=?',(bot_id,)).fetchone()
+        cur = con.cursor()
+        cur.execute('SELECT * FROM bots WHERE id=?',(bot_id,))
+        r = cur.fetchone()
         if not r: return
         bot_data = to_dict(r)
 
@@ -476,7 +487,9 @@ def start_roi_worker(bot_id):
             mark = float(data.get('p') or data.get('markPrice') or 0)
             
             with connect() as con:
-                r = con.cursor().execute("SELECT long_status, short_status, long_sl_point, short_sl_point FROM bots WHERE id=?", (bot_id,)).fetchone()
+                cur = con.cursor()
+                cur.execute("SELECT long_status, short_status, long_sl_point, short_sl_point FROM bots WHERE id=?", (bot_id,))
+                r = cur.fetchone()
                 if r: 
                     bot_data['long_status'] = r['long_status']
                     bot_data['short_status'] = r['short_status']
@@ -528,7 +541,9 @@ def start_roi_worker(bot_id):
 def start_all_bot_workers():
     print("Starting workers for all active bots...")
     with connect() as con:
-        for r in con.cursor().execute("SELECT id FROM bots WHERE long_status='Running' OR short_status='Running'").fetchall():
+        cur = con.cursor()
+        cur.execute("SELECT id FROM bots WHERE long_status='Running' OR short_status='Running'")
+        for r in cur.fetchall():
             bot_id = r['id']
             if bot_id not in ROI_THREADS:
                 print(f"Starting worker for bot ID: {bot_id}")
@@ -536,5 +551,5 @@ def start_all_bot_workers():
 
 if __name__ == '__main__':
     start_all_bot_workers()
-    host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','5000'))
+    host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','5002'))
     socketio.run(app, host=host, port=port)
