@@ -551,5 +551,5 @@ def start_all_bot_workers():
 
 if __name__ == '__main__':
     start_all_bot_workers()
-    host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','5002'))
+    host=os.environ.get('HOST','127.0.0.1'); port=int(os.environ.get('PORT','5004'))
     socketio.run(app, host=host, port=port)
